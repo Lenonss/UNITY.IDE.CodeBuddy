@@ -36,3 +36,6 @@ desktop.ini
 # Package manager
 /[Pp]ackages/manifest.json.bak
 *.log
+
+# CodeBuddy IDE
+.codebuddy/
