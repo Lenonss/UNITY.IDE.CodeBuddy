@@ -12,6 +12,7 @@ using System.Text.RegularExpressions;
 using UnityEngine;
 using SimpleJSON;
 using IOPath = System.IO.Path;
+using Microsoft.Win32;
 
 namespace Microsoft.Unity.VisualStudio.Editor {
 	internal class VisualStudioCodeBuddyCNInstallation : VisualStudioInstallation {
@@ -134,6 +135,22 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			foreach (var basePath in new[] { localAppPath, programFiles, programFilesX86 }) {
 				candidates.Add(IOPath.Combine(basePath, "CodeBuddy CN", "CodeBuddy CN.exe"));
 			}
+
+			// Search common custom installation directories
+			var driveRoots = DriveInfo.GetDrives()
+				.Where(d => d.DriveType == DriveType.Fixed && d.IsReady)
+				.Select(d => d.Name.TrimEnd('\\'))
+				.ToArray();
+
+			foreach (var root in driveRoots) {
+				candidates.Add(IOPath.Combine(root, "Application", "Program Files", "CodeBuddy CN", "CodeBuddy CN.exe"));
+				candidates.Add(IOPath.Combine(root, "Program Files", "CodeBuddy CN", "CodeBuddy CN.exe"));
+				candidates.Add(IOPath.Combine(root, "Program Files (x86)", "CodeBuddy CN", "CodeBuddy CN.exe"));
+				candidates.Add(IOPath.Combine(root, "App", "CodeBuddy CN", "CodeBuddy CN.exe"));
+			}
+
+			// Search Windows Registry for installation path
+			candidates.AddRange(GetInstallPathsFromRegistry());
 #elif UNITY_EDITOR_OSX
 			var appPath = IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
 			candidates.AddRange(Directory.EnumerateDirectories(appPath, "CodeBuddy CN*.app"));
@@ -152,6 +169,53 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 					yield return installation;
 			}
 		}
+
+#if UNITY_EDITOR_WIN
+		private static IEnumerable<string> GetInstallPathsFromRegistry() {
+			var paths = new List<string>();
+
+			// Check both HKLM and HKCU for uninstall entries
+			var registryKeys = new[] {
+				@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+				@\Wow6432Node\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+			};
+
+			foreach (var baseKey in new[] { Registry.LocalMachine, Registry.CurrentUser }) {
+				foreach (var subKeyPath in registryKeys) {
+					using (var key = baseKey.OpenSubKey(subKeyPath)) {
+						if (key == null) continue;
+						foreach (var subKeyName in key.GetSubKeyNames()) {
+							using (var subKey = key.OpenSubKey(subKeyName)) {
+								if (subKey == null) continue;
+								var displayName = subKey.GetValue("DisplayName") as string;
+								if (string.IsNullOrEmpty(displayName) || !displayName.Contains("CodeBuddy"))
+									continue;
+
+								var installLocation = subKey.GetValue("InstallLocation") as string;
+								if (!string.IsNullOrEmpty(installLocation)) {
+									var exePath = IOPath.Combine(installLocation, "CodeBuddy CN.exe");
+									if (File.Exists(exePath))
+										paths.Add(exePath);
+								}
+
+								var displayIcon = subKey.GetValue("DisplayIcon") as string;
+								if (!string.IsNullOrEmpty(displayIcon)) {
+									var dir = IOPath.GetDirectoryName(displayIcon);
+									if (!string.IsNullOrEmpty(dir)) {
+										var exePath = IOPath.Combine(dir, "CodeBuddy CN.exe");
+										if (File.Exists(exePath))
+											paths.Add(exePath);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			return paths;
+		}
+#endif
 
 #if UNITY_EDITOR_LINUX
 		private static readonly Regex DesktopFileExecEntry = new Regex(@"Exec=(\S+)", RegexOptions.Singleline | RegexOptions.Compiled);
